@@ -1,0 +1,40 @@
+# Gehoert in den Fork paulk764/OpenMAIC als .github/workflows/build-image.yml
+# Baut das Docker-Image einer gewaehlten Version und legt es in ghcr.io ab.
+# Start nur von Hand: gh workflow run build-image -R paulk764/OpenMAIC -f ref=v1.4.2
+# Actions per Commit-SHA wie im HomeLab-Dashboard (ci.yml, Job build-image).
+name: build-image
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag oder Branch von OpenMAIC, z. B. v1.4.2'
+        required: true
+        default: 'v1.4.2'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Quelle ist immer das Original, damit Tags nicht erst in den Fork muessen.
+          repository: THU-MAIC/OpenMAIC
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image bauen und hochladen
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/openmaic:${REF}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
