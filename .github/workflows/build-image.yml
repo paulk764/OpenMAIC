@@ -1,6 +1,10 @@
 # Gehoert in den Fork paulk764/OpenMAIC als .github/workflows/build-image.yml
 # Baut das Docker-Image einer gewaehlten Version und legt es in ghcr.io ab.
-# Start nur von Hand: gh workflow run build-image -R paulk764/OpenMAIC -f ref=v1.4.2
+# Start nur von Hand, Beispiele:
+#   gh workflow run build-image -R paulk764/OpenMAIC -f ref=v1.4.2
+#   gh workflow run build-image -R paulk764/OpenMAIC -f ref=v1.4.2 -f suffix=-pro \
+#     -f flags="NEXT_PUBLIC_MAIC_EDITOR_ENABLED=true NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true"
+# NEXT_PUBLIC_* sind Bau-Schalter: sie werden ins Image geschrieben, Aendern heisst neu bauen.
 # Actions per Commit-SHA wie im HomeLab-Dashboard (ci.yml, Job build-image).
 name: build-image
 on:
@@ -10,6 +14,14 @@ on:
         description: 'Tag oder Branch von OpenMAIC, z. B. v1.4.2'
         required: true
         default: 'v1.4.2'
+      suffix:
+        description: 'Anhang an den Image-Tag, z. B. -pro (leer = kein Anhang)'
+        required: false
+        default: ''
+      flags:
+        description: 'Bau-Schalter, durch Leerzeichen getrennt: NAME=wert NAME2=wert'
+        required: false
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -34,7 +46,17 @@ jobs:
       - name: Image bauen und hochladen
         env:
           REF: ${{ inputs.ref }}
+          SUFFIX: ${{ inputs.suffix }}
+          FLAGS: ${{ inputs.flags }}
         run: |
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/openmaic:${REF}"
-          docker build -t "$IMAGE" .
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/openmaic:${REF}${SUFFIX}"
+          ARGS=()
+          for f in $FLAGS; do
+            case "$f" in
+              [A-Z_]*=*) ARGS+=(--build-arg "$f") ;;
+              *) echo "Ungueltiger Schalter: $f"; exit 1 ;;
+            esac
+          done
+          echo "Baue $IMAGE mit: ${ARGS[*]}"
+          docker build "${ARGS[@]}" -t "$IMAGE" .
           docker push "$IMAGE"
