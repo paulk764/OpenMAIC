@@ -1,0 +1,245 @@
+diff --git a/lib/classroom/complete-summary.ts b/lib/classroom/complete-summary.ts
+index c2518b9..f8e7a3d 100644
+--- a/lib/classroom/complete-summary.ts
++++ b/lib/classroom/complete-summary.ts
+@@ -1,5 +1,5 @@
+ import type { Scene, SceneType, QuizContent } from '@/lib/types/stage';
+-import { gradeChoiceQuestions } from '@/lib/quiz/grading';
++import { gradeChoiceQuestions, type QuestionResult } from '@/lib/quiz/grading';
+ 
+ export interface CompleteSummary {
+   countsByType: Partial<Record<SceneType, number>>;
+@@ -11,27 +11,35 @@ export interface CompleteSummary {
+   firstWrongQuizId: string | null;
+ }
+ 
++/** A handed-in attempt, with the verdicts the quiz report shows. */
++export interface GradedAttempt {
++  answers: Record<string, string | string[]>;
++  results?: QuestionResult[];
++}
++
+ /**
+- * A quiz page's graded answers. `null` is not attempted, drafts included: nothing was
++ * A quiz page's graded attempt. `null` is not attempted, drafts included: nothing was
+  * handed in, so nothing is wrong yet. `undefined` is not known (a malformed scene).
+  */
+ export type AnswerReader = (
+   sceneId: string,
+-) => Promise<Record<string, string | string[]> | null | undefined>;
++) => Promise<GradedAttempt | null | undefined>;
+ 
+ type QuizAnswerLoader = (input: {
+   stageId: string;
+   sceneId: string;
+-}) => Promise<{ state?: { phase: string; answers: Record<string, string | string[]> } | null }>;
++}) => Promise<{ state?: ({ phase: string } & GradedAttempt) | null }>;
+ 
+ /** Skip malformed legacy scenes before opening their RuntimeStore partition. */
+ export async function readSceneQuizAnswers(
+   scene: { id: string; stageId?: string } | undefined,
+   load: QuizAnswerLoader,
+-): Promise<Record<string, string | string[]> | null | undefined> {
++): Promise<GradedAttempt | null | undefined> {
+   if (!scene?.stageId) return undefined;
+   const { state } = await load({ stageId: scene.stageId, sceneId: scene.id });
+-  return state?.phase === 'reviewed' ? state.answers : null;
++  if (state?.phase !== 'reviewed') return null;
++  const { answers, results } = state;
++  return results ? { answers, results } : { answers };
+ }
+ 
+ export async function summarizeScenes(
+@@ -50,21 +58,29 @@ export async function summarizeScenes(
+   for (const scene of scenes) {
+     if (scene.type !== 'quiz') continue;
+     const questions = (scene.content as QuizContent).questions ?? [];
+-    let answers: Awaited<ReturnType<AnswerReader>>;
++    let attempt: Awaited<ReturnType<AnswerReader>>;
+     try {
+-      answers = await readAnswers(scene.id);
++      attempt = await readAnswers(scene.id);
+     } catch {
+       continue;
+     }
+-    if (answers === undefined) continue;
+-    if (answers === null) {
++    if (attempt === undefined) continue;
++    if (attempt === null) {
+       unattemptedQuizIds.push(scene.id);
+       continue;
+     }
+-    // Short answers have no grade to count (`gradeChoiceQuestions` leaves them out).
+-    for (const result of gradeChoiceQuestions(questions, answers)) {
++    // The stored verdicts are the report's, and the only grade a short answer has.
++    // An attempt saved without them can still have its choice questions graded.
++    const verdicts = new Map(
++      [...gradeChoiceQuestions(questions, attempt.answers), ...(attempt.results ?? [])].map(
++        (result) => [result.questionId, result],
++      ),
++    );
++    for (const question of questions) {
++      const result = verdicts.get(question.id);
++      if (!result) continue;
+       total += 1;
+-      if (result.correct === true) correct += 1;
++      if (result.status === 'correct') correct += 1;
+       else firstWrongQuizId ??= scene.id;
+     }
+   }
+diff --git a/tests/classroom/complete-summary.test.ts b/tests/classroom/complete-summary.test.ts
+index 9552c51..b3bfa76 100644
+--- a/tests/classroom/complete-summary.test.ts
++++ b/tests/classroom/complete-summary.test.ts
+@@ -1,5 +1,6 @@
+ import { describe, it, expect, vi } from 'vitest';
+ import { readSceneQuizAnswers, summarizeScenes } from '@/lib/classroom/complete-summary';
++import type { QuestionResult } from '@/lib/quiz/grading';
+ import type { Scene, QuizQuestion } from '@/lib/types/stage';
+ 
+ function slide(id: string, order: number): Scene {
+@@ -59,13 +60,13 @@ describe('summarizeScenes', () => {
+ 
+   it('counts scenes by type and omits zeros', async () => {
+     const scenes = [slide('s1', 0), slide('s2', 1), interactive('i1', 2)];
+-    const result = await summarizeScenes(scenes, async () => ({}));
++    const result = await summarizeScenes(scenes, async () => ({ answers: {} }));
+     expect(result.countsByType).toEqual({ slide: 2, interactive: 1 });
+     expect(result.quiz).toBeNull();
+   });
+ 
+   it('returns null quiz when no quiz scenes exist', async () => {
+-    const result = await summarizeScenes([slide('s1', 0)], async () => ({}));
++    const result = await summarizeScenes([slide('s1', 0)], async () => ({ answers: {} }));
+     expect(result.quiz).toBeNull();
+   });
+ 
+@@ -78,7 +79,9 @@ describe('summarizeScenes', () => {
+       q1: { qa: 'a', qb: 'a' },
+       q2: { qc: 'a' },
+     };
+-    const result = await summarizeScenes(scenes, async (sceneId) => answers[sceneId] ?? {});
++    const result = await summarizeScenes(scenes, async (sceneId) => ({
++      answers: answers[sceneId] ?? {},
++    }));
+     expect(result.quiz).toEqual({ correct: 2, total: 3, pct: Math.round((2 / 3) * 100) });
+     expect(result.countsByType.quiz).toBe(2);
+   });
+@@ -93,7 +96,7 @@ describe('summarizeScenes', () => {
+         hasAnswer: false,
+       },
+     ]);
+-    const result = await summarizeScenes([saOnly], async () => ({}));
++    const result = await summarizeScenes([saOnly], async () => ({ answers: {} }));
+     expect(result.quiz).toBeNull();
+     expect(result.countsByType.quiz).toBe(1);
+   });
+@@ -110,7 +113,9 @@ describe('summarizeScenes', () => {
+     const load = (phase: string) => async () => ({ state: { phase, answers: { a: 'x' } } });
+     const scene = { id: 'q', stageId: 's' };
+     await expect(readSceneQuizAnswers(scene, load('draft'))).resolves.toBeNull();
+-    await expect(readSceneQuizAnswers(scene, load('reviewed'))).resolves.toEqual({ a: 'x' });
++    await expect(readSceneQuizAnswers(scene, load('reviewed'))).resolves.toEqual({
++      answers: { a: 'x' },
++    });
+     await expect(
+       readSceneQuizAnswers(scene, async () => ({ state: undefined })),
+     ).resolves.toBeNull();
+@@ -127,7 +132,7 @@ describe('summarizeScenes', () => {
+       q2: { qb: 'x' },
+       q3: { qc: 'x' },
+     };
+-    const result = await summarizeScenes(scenes, async (id) => answers[id]);
++    const result = await summarizeScenes(scenes, async (id) => ({ answers: answers[id] }));
+     expect(result.quiz).toEqual({ correct: 1, total: 3, pct: 33 });
+     expect(result.firstWrongQuizId).toBe('q2');
+   });
+@@ -140,9 +145,87 @@ describe('summarizeScenes', () => {
+ 
+     const result = await summarizeScenes(scenes, async (sceneId) => {
+       if (sceneId === 'unavailable') throw new Error('storage unavailable');
+-      return { qb: 'b' };
++      return { answers: { qb: 'b' } };
+     });
+ 
+     expect(result.quiz).toEqual({ correct: 1, total: 1, pct: 100 });
+   });
+ });
++
++describe('summarizeScenes with short answers', () => {
++  const openQ = (id: string): QuizQuestion => ({
++    id,
++    type: 'short_answer',
++    question: id,
++    hasAnswer: false,
++    points: 20,
++  });
++  const stored = (questionId: string, correct: boolean | null): QuestionResult => ({
++    questionId,
++    correct,
++    status: correct ? 'correct' : 'incorrect',
++    earned: correct ? 20 : 0,
++  });
++  const questions = [
++    openQ('q1'),
++    choiceQ('q2', ['a']),
++    choiceQ('q3', ['b']),
++    openQ('q4'),
++    choiceQ('q5', ['b']),
++  ];
++  const answers = { q1: 'text', q2: 'a', q3: 'b', q4: 'text', q5: 'b' };
++  const all = (q1: boolean | null, q4: boolean | null) => [
++    stored('q1', q1),
++    stored('q2', true),
++    stored('q3', true),
++    stored('q4', q4),
++    stored('q5', true),
++  ];
++  const run = (results?: QuestionResult[], qs = questions) => {
++    const scene = quizScene('quiz', 0, qs);
++    const load = async () => ({ state: { phase: 'reviewed', answers, results } });
++    return summarizeScenes([scene], () => readSceneQuizAnswers(scene, load));
++  };
++
++  it('counts graded short answers like the quiz report', async () => {
++    const result = await run(all(true, true));
++    expect(result.quiz).toEqual({ correct: 5, total: 5, pct: 100 });
++    expect(result.firstWrongQuizId).toBeNull();
++  });
++
++  it('offers the review for a wrong short answer', async () => {
++    const result = await run(all(false, true));
++    expect(result.quiz).toEqual({ correct: 4, total: 5, pct: 80 });
++    expect(result.firstWrongQuizId).toBe('quiz');
++  });
++
++  it('counts a failed grading call as the report does', async () => {
++    const result = await run(all(null, true));
++    expect(result.quiz).toEqual({ correct: 4, total: 5, pct: 80 });
++    expect(result.firstWrongQuizId).toBe('quiz');
++  });
++
++  it('scores a quiz of short answers only', async () => {
++    const graded = [stored('q1', true), stored('q4', false)];
++    const result = await run(graded, [openQ('q1'), openQ('q4')]);
++    expect(result.quiz).toEqual({ correct: 1, total: 2, pct: 50 });
++  });
++
++  it('keeps the stored verdict when the answer key is edited later', async () => {
++    const edited = questions.map((q) => (q.id === 'q2' ? choiceQ('q2', ['b']) : q));
++    const result = await run(all(true, true), edited);
++    expect(result.quiz).toEqual({ correct: 5, total: 5, pct: 100 });
++  });
++
++  it('ignores the result of a deleted question', async () => {
++    const result = await run(all(false, true), questions.slice(1));
++    expect(result.quiz).toEqual({ correct: 4, total: 4, pct: 100 });
++  });
++
++  it('falls back to choice questions for attempts without stored results', async () => {
++    for (const results of [undefined, []]) {
++      const result = await run(results);
++      expect(result.quiz).toEqual({ correct: 3, total: 3, pct: 100 });
++    }
++  });
++});

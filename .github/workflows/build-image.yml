@@ -38,6 +38,23 @@ jobs:
           repository: THU-MAIC/OpenMAIC
           ref: ${{ inputs.ref }}
           persist-credentials: false
+      # Eigene Korrekturen: patches/<ref>/*.patch aus diesem Fork. Ohne Ordner bleibt das Original.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .fork
+          persist-credentials: false
+      - name: Eigene Korrekturen anwenden
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          shopt -s nullglob
+          for p in .fork/patches/"$REF"/*.patch; do
+            echo "Korrektur: $p"
+            git apply --check "$p"
+            git apply "$p"
+          done
+          rm -rf .fork
+          git status --short
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
@@ -58,5 +75,9 @@ jobs:
             esac
           done
           echo "Baue $IMAGE mit: ${ARGS[*]}"
+          if [ -f tests/classroom/complete-summary.test.ts ]; then
+            docker build "${ARGS[@]}" --target builder -t openmaic-pruefung .
+            docker run --rm openmaic-pruefung pnpm exec vitest run tests/classroom
+          fi
           docker build "${ARGS[@]}" -t "$IMAGE" .
           docker push "$IMAGE"
