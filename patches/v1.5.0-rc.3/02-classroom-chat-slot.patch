@@ -22,7 +22,7 @@ index 83a8858..7192262 100644
    'maic-agent-driver': 'agent',
    'conversation-title': 'agent.title',
 diff --git a/tests/config/model-slots.test.ts b/tests/config/model-slots.test.ts
-index 508820c..0a3f818 100644
+index 508820c..3a89b50 100644
 --- a/tests/config/model-slots.test.ts
 +++ b/tests/config/model-slots.test.ts
 @@ -32,7 +32,7 @@ const EXPECTED_STAGE_SLOTS: Record<LlmStage, SlotId> = {
@@ -54,3 +54,14 @@ index 508820c..0a3f818 100644
    });
  });
  
+@@ -147,7 +154,9 @@ describe('stage → slot mapping', () => {
+ 
+   it('keeps every stage of a settings station on one slot', () => {
+     for (const [station, stages] of Object.entries(STATION_STAGE_KEYS)) {
+-      const slots = new Set(stages.map((stage) => slotForStage(stage as LlmStage)));
++      // Fork paulk764: chat-adapter resolves through classroom.chat, a config-only child of classroom.
++      const own = stages.filter((stage) => !(station === 'interaction' && stage === 'chat-adapter'));
++      const slots = new Set(own.map((stage) => slotForStage(stage as LlmStage)));
+       expect(slots.size, station).toBe(1);
+     }
+   });
