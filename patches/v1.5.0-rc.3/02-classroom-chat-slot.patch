@@ -1,0 +1,56 @@
+diff --git a/lib/config/model-slots.ts b/lib/config/model-slots.ts
+index 83a8858..7192262 100644
+--- a/lib/config/model-slots.ts
++++ b/lib/config/model-slots.ts
+@@ -67,6 +67,9 @@ export const MODEL_SLOTS = [
+   { id: 'course.content.pbl', capability: 'chat', parent: 'course.content' },
+   { id: 'course.actions', capability: 'chat', parent: 'llm' },
+   { id: 'classroom', capability: 'chat', parent: 'llm' },
++  // Fork paulk764 (25.11.2026): Gesprächsrunden getrennt von der Quizbewertung wählbar, damit die Runden
++  // ein schnelles Modell nutzen und die Bewertung beim starken bleibt. Nur in openmaic.yml.
++  { id: 'classroom.chat', capability: 'chat', parent: 'classroom', configOnly: true },
+   {
+     id: 'agent',
+     capability: 'chat',
+@@ -108,7 +111,7 @@ export const STAGE_SLOTS = {
+   'pbl-v2-runtime:open-task': 'classroom',
+   'pbl-v2-runtime:evaluate': 'classroom',
+   'pbl-v2-runtime:simulator': 'classroom',
+-  'chat-adapter': 'classroom',
++  'chat-adapter': 'classroom.chat',
+   'web-search-query-rewrite': 'course.research',
+   'maic-agent-driver': 'agent',
+   'conversation-title': 'agent.title',
+diff --git a/tests/config/model-slots.test.ts b/tests/config/model-slots.test.ts
+index 508820c..0a3f818 100644
+--- a/tests/config/model-slots.test.ts
++++ b/tests/config/model-slots.test.ts
+@@ -32,7 +32,7 @@ const EXPECTED_STAGE_SLOTS: Record<LlmStage, SlotId> = {
+   'pbl-v2-runtime:open-task': 'classroom',
+   'pbl-v2-runtime:evaluate': 'classroom',
+   'pbl-v2-runtime:simulator': 'classroom',
+-  'chat-adapter': 'classroom',
++  'chat-adapter': 'classroom.chat',
+   'web-search-query-rewrite': 'course.research',
+   'maic-agent-driver': 'agent',
+   'conversation-title': 'agent.title',
+@@ -109,10 +109,17 @@ describe('capability slot tree', () => {
+     expect(getSlot('agent.title').requires).toBeUndefined();
+   });
+ 
+-  it('keeps agent.title out of the settings UI', () => {
++  it('keeps agent.title and classroom.chat out of the settings UI', () => {
+     expect(getSlot('agent.title').configOnly).toBe(true);
++    expect(getSlot('classroom.chat').configOnly).toBe(true);
+     const shown = MODEL_SLOTS.filter((slot) => 'configOnly' in slot && slot.configOnly);
+-    expect(shown.map((slot) => slot.id)).toEqual(['agent.title']);
++    expect(shown.map((slot) => slot.id)).toEqual(['classroom.chat', 'agent.title']);
++  });
++
++  it('lets classroom chat inherit from classroom while quiz grading stays on classroom', () => {
++    expect(slotLineage('classroom.chat')).toEqual(['classroom.chat', 'classroom', 'llm']);
++    expect(STAGE_SLOTS['chat-adapter']).toBe('classroom.chat');
++    expect(STAGE_SLOTS['quiz-grade']).toBe('classroom');
+   });
+ });
+ 

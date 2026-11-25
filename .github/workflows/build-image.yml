@@ -77,7 +77,12 @@ jobs:
           echo "Baue $IMAGE mit: ${ARGS[*]}"
           if [ -f tests/classroom/complete-summary.test.ts ]; then
             docker build "${ARGS[@]}" --target builder -t openmaic-pruefung .
-            docker run --rm openmaic-pruefung pnpm exec vitest run tests/classroom
+            # Seit 25.11.2026 auch die Slot- und Chat-Tests (Patch 02 classroom.chat)
+            TESTS=""
+            for d in tests/classroom tests/config tests/server/model-config tests/lib/chat/pi tests/model-settings; do
+              [ -e "$d" ] && TESTS="$TESTS $d"
+            done
+            docker run --rm openmaic-pruefung pnpm exec vitest run $TESTS
           fi
           docker build "${ARGS[@]}" -t "$IMAGE" .
           docker push "$IMAGE"
